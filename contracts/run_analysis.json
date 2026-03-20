@@ -1,0 +1,5 @@
+{
+  "event": "run_analysis",
+  "produces": ["outputs/analysis/"],
+  "requires_commit": true
+}
