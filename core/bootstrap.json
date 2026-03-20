@@ -1,0 +1,29 @@
+{
+  "event": "write_file_batch",
+  "files": [
+    { "path": "memory/state.json", "content": "{}" },
+    { "path": "memory/run_index.json", "content": "{\"runs\":[]}" },
+    { "path": "memory/case_index.json", "content": "{\"cases\":[]}" },
+    { "path": "memory/session_log.json", "content": "{\"sessions\":[]}" },
+    { "path": "memory/repo_index.json", "content": "{\"initialized\":true}" },
+    { "path": "memory/event_log.json", "content": "{}" },
+    { "path": "memory/snapshot_log.json", "content": "{}" },
+
+    { "path": "contracts/repo_init.json", "content": "{}" },
+    { "path": "contracts/write_file.json", "content": "{}" },
+    { "path": "contracts/run_analysis.json", "content": "{}" },
+    { "path": "contracts/run_tracking.json", "content": "{}" },
+    { "path": "contracts/self_healing.json", "content": "{}" },
+    { "path": "contracts/state_transition.json", "content": "{}" },
+    { "path": "contracts/session_journal.json", "content": "{}" },
+
+    { "path": "cases/.gitkeep", "content": "" },
+    { "path": "outputs/.gitkeep", "content": "" },
+
+    { "path": "docs/README.md", "content": "# Docs" },
+    { "path": "docs/architecture.md", "content": "# Architecture" },
+    { "path": "docs/system.md", "content": "# System" },
+
+    { "path": "core/README.md", "content": "# Core" }
+  ]
+}
