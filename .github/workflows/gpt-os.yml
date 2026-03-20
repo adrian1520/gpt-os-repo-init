@@ -11,24 +11,50 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -------------------------
+      # CHECKOUT
+      # -------------------------
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # -------------------------
+      # PYTHON
+      # -------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # -------------------------
+      # QUEUE MODE (BOOTSTRAP)
+      # -------------------------
+      - name: Process bootstrap queue
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          queue = Path("core/bootstrap.json")
+
+          if queue.exists():
+              data = json.loads(queue.read_text())
+
+              for f in data.get("files", []):
+                  path = Path(f["path"])
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_text(f.get("content", ""), encoding="utf-8")
+          PY
+
+      # -------------------------
+      # BOOTSTRAP MEMORY + RUN TRACKING
+      # -------------------------
       - name: Bootstrap memory and set RUNNING state
         env:
-          EVENT_TYPE: ${{ github.event.client_payload.event || github.event.action }}
+          EVENT_TYPE: ${{ github.event.action }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-          SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          CASE_ID: ${{ github.event.client_payload.case_id }}
-          FILE_PATH: ${{ github.event.client_payload.path }}
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -37,61 +63,30 @@ jobs:
           from datetime import datetime, timezone
 
           def now():
-              return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+              return datetime.now(timezone.utc).isoformat()
 
-          def load_json(path, default):
+          def load(path, default):
               p = Path(path)
               if p.exists():
                   try:
-                      return json.loads(p.read_text(encoding="utf-8"))
-                  except Exception:
+                      return json.loads(p.read_text())
+                  except:
                       return default
               return default
 
-          def write_json(path, data):
+          def write(path, data):
               p = Path(path)
               p.parent.mkdir(parents=True, exist_ok=True)
-              p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+              p.write_text(json.dumps(data, indent=2))
 
-          for d in [
-              "memory","contracts","cases","outputs","docs","core",
-              "outputs/analysis","outputs/logs",".github/workflows",
-          ]:
-              Path(d).mkdir(parents=True, exist_ok=True)
+          state = load("memory/state.json", {})
+          run_index = load("memory/run_index.json", {"runs": []})
 
-          state = load_json("memory/state.json", {
-              "system_state": "INIT",
-              "last_transition": None,
-              "active_mode": "init",
-              "last_run_id": None,
-              "last_update": None
-          })
-
-          run_index = load_json("memory/run_index.json", {"runs": []})
-          case_index = load_json("memory/case_index.json", {"cases": []})
-          session_log = load_json("memory/session_log.json", {"sessions": []})
-          repo_index = load_json("memory/repo_index.json", {"initialized": False, "structure_version": "2.0", "last_scan": None})
-
-          event_type = os.environ.get("EVENT_TYPE") or "unknown"
           run_id = int(os.environ["RUN_ID"])
           run_attempt = int(os.environ["RUN_ATTEMPT"])
-          session_id = os.environ["SESSION_ID"]
-          case_id = os.environ.get("CASE_ID") or None
-          file_path = os.environ.get("FILE_PATH") or None
-
-          prev_state = state.get("system_state") or "INIT"
-          transition = f"{prev_state}→RUNNING"
-
-          outputs_expected = []
-          if event_type == "write_file" and file_path:
-              outputs_expected = [file_path]
-          elif event_type == "run_analysis":
-              outputs_expected = ["outputs/analysis/result.txt"]
 
           state.update({
               "system_state": "RUNNING",
-              "last_transition": transition,
-              "active_mode": "execution",
               "last_run_id": run_id,
               "last_update": now()
           })
@@ -99,20 +94,12 @@ jobs:
           run_index["runs"].append({
               "run_id": run_id,
               "run_attempt": run_attempt,
-              "dispatch_id": f"{event_type}:{run_id}:{run_attempt}",
-              "event_type": event_type,
               "status": "running",
-              "session_id": session_id,
-              "case_id": case_id,
-              "started_at": now(),
-              "outputs_expected": outputs_expected
+              "started_at": now()
           })
 
-          write_json("memory/state.json", state)
-          write_json("memory/run_index.json", run_index)
-          write_json("memory/session_log.json", session_log)
-          write_json("memory/repo_index.json", repo_index)
-          write_json("memory/case_index.json", case_index)
+          write("memory/state.json", state)
+          write("memory/run_index.json", run_index)
           PY
 
       - name: Commit bootstrap tracking
@@ -121,35 +108,101 @@ jobs:
           git commit -m "GPT-OS bootstrap tracking" || true
           git push
 
-      - name: Write file
-        if: github.event.action == 'write_file' || github.event.client_payload.event == 'write_file'
-        env:
-          FILE_PATH: ${{ github.event.client_payload.path }}
-          FILE_CONTENT: ${{ github.event.client_payload.content }}
+      # -------------------------
+      # WRITE FILE (OPTIONAL)
+      # -------------------------
+      - name: Write file (fallback)
+        if: github.event.action == 'write_file'
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import os
+          echo "No payload mode active - skipped direct write"
 
-          p = Path(os.environ["FILE_PATH"])
-          p.parent.mkdir(parents=True, exist_ok=True)
-          p.write_text(os.environ.get("FILE_CONTENT",""), encoding="utf-8")
-          PY
-
-      - name: Commit write
-        if: github.event.action == 'write_file' || github.event.client_payload.event == 'write_file'
-        run: |
-          git add .
-          git commit -m "GPT-OS write" || true
-          git push
-
+      # -------------------------
+      # RUN ANALYSIS
+      # -------------------------
       - name: Run analysis
-        if: github.event.action == 'run_analysis' || github.event.client_payload.event == 'run_analysis'
+        if: github.event.action == 'run_analysis'
         run: |
           mkdir -p outputs/analysis outputs/logs
           echo "analysis completed" > outputs/analysis/result.txt
 
+      # -------------------------
+      # FINALIZE SUCCESS
+      # -------------------------
       - name: Finalize success
         if: success()
         run: |
-          echo "SUCCESS"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from datetime import datetime
+
+          def now():
+              return datetime.utcnow().isoformat()
+
+          def load(p, d):
+              p = Path(p)
+              if p.exists():
+                  return json.loads(p.read_text())
+              return d
+
+          def write(p, d):
+              Path(p).write_text(json.dumps(d, indent=2))
+
+          state = load("memory/state.json", {})
+          run_index = load("memory/run_index.json", {"runs": []})
+
+          if run_index["runs"]:
+              run_index["runs"][-1]["status"] = "completed"
+              run_index["runs"][-1]["finished_at"] = now()
+
+          state["system_state"] = "VERIFIED"
+          state["last_update"] = now()
+
+          write("memory/state.json", state)
+          write("memory/run_index.json", run_index)
+          PY
+
+          git add .
+          git commit -m "GPT-OS finalize success" || true
+          git push
+
+      # -------------------------
+      # FINALIZE FAILURE
+      # -------------------------
+      - name: Finalize failure
+        if: failure()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from datetime import datetime
+
+          def now():
+              return datetime.utcnow().isoformat()
+
+          def load(p, d):
+              p = Path(p)
+              if p.exists():
+                  return json.loads(p.read_text())
+              return d
+
+          def write(p, d):
+              Path(p).write_text(json.dumps(d, indent=2))
+
+          state = load("memory/state.json", {})
+          run_index = load("memory/run_index.json", {"runs": []})
+
+          if run_index["runs"]:
+              run_index["runs"][-1]["status"] = "failed"
+              run_index["runs"][-1]["finished_at"] = now()
+
+          state["system_state"] = "FAILED"
+          state["last_update"] = now()
+
+          write("memory/state.json", state)
+          write("memory/run_index.json", run_index)
+          PY
+
+          git add .
+          git commit -m "GPT-OS finalize failure" || true
+          git push
