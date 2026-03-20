@@ -1,0 +1,5 @@
+{
+  "event": "write_file",
+  "required_fields": ["path", "content"],
+  "commit_required": true
+}
